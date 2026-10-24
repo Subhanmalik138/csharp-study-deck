@@ -35,6 +35,7 @@ public sealed class StudyCli
         {
             "deck" => Deck(rest),
             "card" => CardCmd(rest),
+            "review" => Review(rest),
             "help" or "--help" or "-h" => Usage(),
             _ => Fail($"Unknown command '{tokens[0]}'. Run 'help' for usage."),
         };
@@ -200,6 +201,66 @@ public sealed class StudyCli
         return 0;
     }
 
+    // ---------- review ----------
+
+    private int Review(List<string> args)
+    {
+        var opts = CliOptions.Parse(args);
+        Deck? deck = null;
+        var deckName = opts.Get("deck");
+        if (deckName is not null)
+        {
+            deck = FindDeck(deckName);
+            if (deck is null) return Fail($"No deck '{deckName}'.");
+        }
+        int? limit = null;
+        var limitRaw = opts.Get("limit");
+        if (limitRaw is not null && (!int.TryParse(limitRaw, out var l) || l <= 0))
+            return Fail("--limit must be a positive integer.");
+        if (limitRaw is not null) limit = int.Parse(limitRaw);
+
+        var now = _nowUtc();
+        var due = ReviewSession.DueCards(_store.Data, deck, now, limit);
+        if (due.Count == 0)
+        {
+            _out.WriteLine("Nothing due. Enjoy the break — new cards become due as their intervals elapse.");
+            return 0;
+        }
+
+        _out.WriteLine($"Reviewing {due.Count} card(s) due.");
+        var grades = new List<int>();
+        foreach (var card in due)
+        {
+            var deckName2 = _store.Data.Decks.FirstOrDefault(d => d.Id == card.DeckId)?.Name ?? "?";
+            _out.WriteLine();
+            _out.WriteLine($"[{deckName2}] {card.Front}");
+            _out.Write("Press Enter to reveal the answer... ");
+            if (_in.ReadLine() is null) break; // EOF: keep progress saved so far
+            _out.WriteLine($"  Answer: {card.Back}");
+            int grade;
+            while (true)
+            {
+                _out.Write("Grade yourself 0-5 (0 = blank, 5 = perfect): ");
+                var line = _in.ReadLine();
+                if (line is null) goto Done; // EOF mid-card: card stays ungraded
+                if (int.TryParse(line.Trim(), out grade) && grade >= 0 && grade <= 5) break;
+                _out.WriteLine("Please enter a number from 0 to 5.");
+            }
+            Sm2Scheduler.Review(card, grade, _nowUtc());
+            grades.Add(grade);
+            _store.Save(); // save after every card, so an interrupted session keeps its progress
+            _out.WriteLine(grade >= 3
+                ? $"  ✓ Next review in {card.IntervalDays} day(s) ({card.DueUtc:yyyy-MM-dd})."
+                : $"  ✗ Lapsed — back tomorrow ({card.DueUtc:yyyy-MM-dd}).");
+        }
+    Done:
+        var summary = ReviewSession.Summary.From(grades);
+        _out.WriteLine();
+        _out.WriteLine($"Session done: {summary.Reviewed} reviewed, {summary.Passed} passed, " +
+                       $"{summary.Failed} lapsed, average grade {summary.AverageQuality:F1}.");
+        return 0;
+    }
+
     // ---------- helpers ----------
 
     internal Deck? FindDeck(string nameOrId) =>
@@ -269,6 +330,7 @@ public sealed class StudyCli
               card list [--deck name] [--due] [--new] [--tag x]
               card show <id>
               card delete <id> --force
+              review [--deck name] [--limit N]
               help
             """);
     }
