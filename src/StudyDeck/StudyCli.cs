@@ -36,6 +36,9 @@ public sealed class StudyCli
             "deck" => Deck(rest),
             "card" => CardCmd(rest),
             "review" => Review(rest),
+            "stats" => StatsCmd(rest),
+            "export" => Export(rest),
+            "import" => Import(rest),
             "help" or "--help" or "-h" => Usage(),
             _ => Fail($"Unknown command '{tokens[0]}'. Run 'help' for usage."),
         };
@@ -261,6 +264,62 @@ public sealed class StudyCli
         return 0;
     }
 
+    // ---------- stats / exchange ----------
+
+    private int StatsCmd(List<string> args)
+    {
+        var opts = CliOptions.Parse(args);
+        var now = _nowUtc();
+        var data = _store.Data;
+        var overall = Stats.Compute(data, now);
+
+        var deckName = opts.Get("deck");
+        if (deckName is not null)
+        {
+            var deck = FindDeck(deckName);
+            if (deck is null) return Fail($"No deck '{deckName}'.");
+            var s = overall.PerDeck.First(p => p.Name == deck.Name);
+            PrintDeckStats(s);
+            return 0;
+        }
+
+        _out.WriteLine($"Decks: {overall.Decks}  Cards: {overall.Cards}");
+        _out.WriteLine($"  Due now: {overall.Due}  New: {overall.New}  " +
+                       $"Due in 24h: {overall.DueTomorrow}  Due in 7d: {overall.DueIn7Days}");
+        _out.WriteLine($"  Reviews: {overall.Reviews}  Lapses: {overall.Lapses}  " +
+                       $"Average ease: {(overall.Cards == 0 ? "-" : overall.AverageEase.ToString("F2"))}");
+        if (overall.PerDeck.Count > 0)
+        {
+            _out.WriteLine("  Per deck:");
+            foreach (var s in overall.PerDeck) PrintDeckStats(s);
+        }
+        return 0;
+    }
+
+    private void PrintDeckStats(Stats.DeckStats s) =>
+        _out.WriteLine($"    {s.Name}: {s.Cards} cards, {s.Due} due, {s.New} new, " +
+                       $"{s.Reviews} reviews, {s.Lapses} lapses, avg ease {s.AverageEase:F2}");
+
+    private int Export(List<string> args)
+    {
+        var opts = CliOptions.Parse(args);
+        if (opts.Positionals.Count == 0) return Fail("Usage: export <file.json>");
+        DataExchange.Export(_store.Data, opts.Positionals[0]);
+        _out.WriteLine($"Exported {_store.Data.Decks.Count} deck(s) and {_store.Data.Cards.Count} card(s) to {opts.Positionals[0]}.");
+        return 0;
+    }
+
+    private int Import(List<string> args)
+    {
+        var opts = CliOptions.Parse(args);
+        if (opts.Positionals.Count == 0) return Fail("Usage: import <file.json>");
+        if (!File.Exists(opts.Positionals[0])) return Fail($"No such file: {opts.Positionals[0]}");
+        var (decks, cards, skipped) = DataExchange.Import(_store.Data, opts.Positionals[0]);
+        _store.Save();
+        _out.WriteLine($"Imported {decks} deck(s) and {cards} card(s), skipped {skipped} (unknown deck or already present).");
+        return 0;
+    }
+
     // ---------- helpers ----------
 
     internal Deck? FindDeck(string nameOrId) =>
@@ -331,6 +390,9 @@ public sealed class StudyCli
               card show <id>
               card delete <id> --force
               review [--deck name] [--limit N]
+              stats [--deck name]
+              export <file.json>
+              import <file.json>
               help
             """);
     }
