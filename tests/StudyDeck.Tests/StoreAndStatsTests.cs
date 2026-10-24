@@ -69,7 +69,7 @@ public sealed class StoreAndStatsTests
         var stats = Stats.Compute(data, now);
         Assert.Equal(3, stats.Cards);
         Assert.Equal(1, stats.Due);
-        Assert.Equal(1, stats.New);
+        Assert.Equal(2, stats.New); // cards 1 and 3 have never been reviewed
         Assert.Equal(1, stats.DueTomorrow);
         Assert.Equal(2, stats.DueIn7Days);
         Assert.Equal(2, stats.Reviews);
